@@ -1,0 +1,83 @@
+name: s2-tracing-demo
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # SingleStore (official Dev Image + our init.sql baked in, see singlestore/)
+  # ---------------------------------------------------------------------------
+  singlestore:
+    build:
+      context: ./singlestore
+    image: s2-demo-singlestore:local
+    # The Dev Image is amd64-only; required on Apple silicon, harmless elsewhere.
+    platform: linux/amd64
+    environment:
+      ROOT_PASSWORD: ${S2_ROOT_PASSWORD:-rootpass}
+    ports:
+      - "3306:3306"   # MySQL protocol (JDBC)
+      - "8091:8080"   # SingleStore Studio UI -> http://localhost:8091
+      - "9000:9000"   # Data API (HTTP)
+    volumes:
+      - s2-data:/data
+    # Override the image's default healthcheck: "healthy" only once init.sql has
+    # created the schema, so the app never starts against an empty database.
+    healthcheck:
+      test: ["CMD-SHELL", "singlestore -uroot -p\"$$ROOT_PASSWORD\" -e 'SELECT 1 FROM demo.products LIMIT 1' > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Spring Boot CRUD service
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: ./app
+    image: s2-demo-app:local
+    depends_on:
+      singlestore:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      # --- JDBC ---------------------------------------------------------------
+      DB_URL: ${DB_URL:-jdbc:singlestore://singlestore:3306/demo}
+      DB_DRIVER: ${DB_DRIVER:-com.singlestore.jdbc.Driver}
+      DB_USER: app
+      DB_PASSWORD: app_password
+
+      # --- Datadog tracer -----------------------------------------------------
+      JAVA_TOOL_OPTIONS: "-javaagent:/opt/datadog/dd-java-agent.jar"
+      DD_TRACE_ENABLED: ${DD_TRACE_ENABLED:-true}
+      DD_SERVICE: s2-demo
+      DD_ENV: ${DD_ENV:-local}
+      DD_VERSION: "0.1.0"
+      DD_AGENT_HOST: datadog-agent
+      DD_LOGS_INJECTION: "true"
+      DD_TRACE_DEBUG: ${DD_TRACE_DEBUG:-false}
+      # Opt the SingleStore driver classes into the JDBC instrumentation.
+      # NOTE: "-" (not ":-") so that setting them to an empty value in .env really
+      # disables them — useful for the "before" baseline run.
+      DD_TRACE_JDBC_CONNECTION_CLASS_NAME: ${DD_TRACE_JDBC_CONNECTION_CLASS_NAME-com.singlestore.jdbc.Connection}
+      DD_TRACE_JDBC_PREPARED_STATEMENT_CLASS_NAME: ${DD_TRACE_JDBC_PREPARED_STATEMENT_CLASS_NAME-com.singlestore.jdbc.ClientPreparedStatement}
+    restart: on-failure
+
+  # ---------------------------------------------------------------------------
+  # Datadog Agent — only started with:  docker compose --profile datadog up
+  # ---------------------------------------------------------------------------
+  datadog-agent:
+    profiles: ["datadog"]
+    image: gcr.io/datadoghq/agent:7
+    environment:
+      DD_API_KEY: ${DD_API_KEY:-}   # set in .env
+      DD_SITE: ${DD_SITE:-datadoghq.com}
+      DD_HOSTNAME: s2-demo-local
+      DD_ENV: ${DD_ENV:-local}
+      DD_APM_ENABLED: "true"
+      DD_APM_NON_LOCAL_TRAFFIC: "true"
+    ports:
+      - "8126:8126"
+
+volumes:
+  s2-data:

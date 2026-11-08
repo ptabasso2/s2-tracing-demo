@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: s2-demo
+  datasource:
+    # Defaults target the SingleStore JDBC driver. Override with env vars to switch
+    # to MariaDB Connector/J, e.g.:
+    #   DB_URL=jdbc:mariadb://singlestore:3306/demo  DB_DRIVER=org.mariadb.jdbc.Driver
+    url: ${DB_URL:jdbc:singlestore://localhost:3306/demo}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app_password}
+    # Spring Boot can't infer a driver from a jdbc:singlestore:// URL, so set it explicitly.
+    driver-class-name: ${DB_DRIVER:com.singlestore.jdbc.Driver}
+    hikari:
+      pool-name: s2-hikari
+      maximum-pool-size: 10
+      connection-timeout: 10000
+
+server:
+  port: 8080
+  error:
+    include-message: always
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
